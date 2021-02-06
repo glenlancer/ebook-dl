@@ -8,12 +8,10 @@ app = typer.Typer()
 __all__ = ['run']
 
 @app.command()
-def collect_book_info(
-    keyword: str = typer.Argument(''),
-) -> None:
-    config.assign('keyword', keyword)
+def collect_book_info() -> None:
     scraper = Scraper()
-    pass
+    scraper.collect_book_info()
+
 
 @app.command()
 def search(
@@ -22,6 +20,7 @@ def search(
     config.assign('keyword', keyword)
     scraper = Scraper()
     scraper.get_all_book_profile_page_urls()
+
 
 def run() -> None:
     config.init()

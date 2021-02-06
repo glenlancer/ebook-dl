@@ -2,6 +2,7 @@
 # -*- coding:utf-8 -*-
 
 import logging
+from rich.console import Console
 
 __all__ = ['get', 'assign', 'init']
 
@@ -17,6 +18,7 @@ def config_logging():
 def init():
     global opts
     opts = {
+        'console': Console(),
         'keyword': '',
         'fake_headers': {
             'User-Agent': 'Mozilla/5.0 3578.98 Safari/537.36'
