@@ -1,5 +1,7 @@
-import typer
+#!/usr/bin/python3
+# -*- conding:utf-8 -*-
 
+import typer
 from . import config
 from .scraper import Scraper
 

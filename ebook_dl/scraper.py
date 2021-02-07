@@ -17,7 +17,6 @@ from bs4 import BeautifulSoup
 class BookInfo:
     def __init__(self):
         self.title = ''
-        self.preview_img = ''
         self.details = ''
         self.description = ''
         self.tn_url = ''
@@ -148,28 +147,27 @@ class Scraper:
     @staticmethod
     def _get_book_info_from_bs(book_bs):
         bookInfo = BookInfo()
-        content_bs = book_bs.find_all('section', {'class': 'content'})
-        if content_bs == []:
+        content_bs = book_bs.find('section', {'class': 'content'})
+        if not content_bs:
             return None
-        content_bs = content_bs[0]
         title_bs = content_bs.find('h3', {'class': 'product-title'})
         if title_bs:
             bookInfo.title = title_bs.get_text()
-        preview_bs = content_bs.find('div', {'class': 'preview-pic'})
-        if preview_bs:
-            bookInfo.preview_img = preview_bs.find('img').get('src')
+        if not bookInfo.title:
+            return None
         details_bs = content_bs.find('div', {'class': 'details'})
         if details_bs:
             details_list_bs = details_bs.find('ul', {'class': 'list-unstyled'})
             if details_list_bs:
-                bookInfo.details = details_list_bs.get_text()
+                bookInfo.details = details_list_bs.get_text().strip('\n')
         body_bs_list = content_bs.find_all('div', {'class': 'body'})
         if len(body_bs_list) == 6:
             description_bs = body_bs_list[3]
-            bookInfo.description = Tomd(str(description_bs)).markdown
+            bookInfo.description = Tomd(str(description_bs)).markdown.strip()
         download_bs = content_bs.find('span', {'class': 'tn-download'})
         if download_bs:
             bookInfo.tn_url = download_bs.get('tn-url')
+        return bookInfo
 
 
     @staticmethod
@@ -183,6 +181,7 @@ class Scraper:
             book_info = Scraper._get_book_info_from_bs(book_bs)
             thread_book_info_collection.append(book_info)
         thread_pools[index] = thread_book_info_collection
+        config.get('console').log(f'Thread {index} finished its job.')
 
 
     def _retrieve_book_profile_page_urls_from_other_page(self, page_count):
@@ -238,6 +237,10 @@ class Scraper:
         )
         self._book_info_collection = []
         thread_manager.thread_job_handling(self._book_info_collection)
+        self._book_info_collection = list(
+            filter(lambda x: x is not None, self._book_info_collection)
+        )
+        self.db.store_book_info_collection(self._book_info_collection)
 
 
     def collect_book_info(self):
@@ -247,4 +250,5 @@ class Scraper:
             rich.print('There is no record in [bold]profile[/bold] table, probably need to run [bold]search[/bold] command first.')
             rich.print(':monkey: :pile_of_poo:')
             return
-        self._collect_book_info_from_profile_pages()
+        with config.get('console').status('[bold green]collecting book info from profile pages...') as status:
+            self._collect_book_info_from_profile_pages()
