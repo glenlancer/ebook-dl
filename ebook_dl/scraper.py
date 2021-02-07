@@ -4,28 +4,26 @@
 from . import config
 from .thread_manager import ThreadManager
 from .db import Db
+from .db import BookInfo
 
+import os
 import re
 import typer
 import time
 import requests
 import logging
 import rich
+from urllib.parse import quote
 from tomd import Tomd
 from bs4 import BeautifulSoup
-
-class BookInfo:
-    def __init__(self):
-        self.title = ''
-        self.details = ''
-        self.description = ''
-        self.tn_url = ''
 
 
 class Scraper:
 
     _MAIN_URL = 'https://itebooksfree.com/'
+    _URL_THAT_WONT_WORK = 'http://file.allitebooks.com'
     _REQUEST_TIMEOUT = 15
+    _DEFAULT_OUTPUT_DIR = 'output'
     _LOGGER = logging.getLogger(__name__)
 
 
@@ -34,6 +32,7 @@ class Scraper:
         self.db = Db()
         self._book_profile_page_urls = []
         self._book_info_collection = []
+        self._book_url_collection = []
 
 
     @staticmethod
@@ -166,8 +165,27 @@ class Scraper:
             bookInfo.description = Tomd(str(description_bs)).markdown.strip()
         download_bs = content_bs.find('span', {'class': 'tn-download'})
         if download_bs:
-            bookInfo.tn_url = download_bs.get('tn-url')
+            bookInfo.tn_url.append(download_bs.get('tn-url'))
         return bookInfo
+
+
+    @staticmethod
+    def _get_resource_url_from_tn_url(tn_url):
+        url = Scraper._MAIN_URL + '/download/' + tn_url
+        try:
+            response = requests.get(
+                url, 
+                headers=config.get('fake_headers'),
+                timeout=Scraper._REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            res_json = response.json()
+            if res_json['ok']:
+                return res_json['url']
+            return ''
+        except Exception as e:
+            Scraper._LOGGER.error(f'Get resource url failed: {e}')
+            return ''
 
 
     @staticmethod
@@ -182,6 +200,65 @@ class Scraper:
             thread_book_info_collection.append(book_info)
         thread_pools[index] = thread_book_info_collection
         config.get('console').log(f'Thread {index} finished its job.')
+
+
+    @staticmethod
+    def _run_collect_book_url(thread_pools, index, url_workload, extra_workload, book_urls):
+        thread_book_url_collection = []
+        start_index, workload = Scraper._calculate_start_index_and_workload(
+            index, url_workload, extra_workload
+        )
+        for book_url in book_urls[start_index:start_index+workload]:
+            book_url.resource_url = Scraper._get_resource_url_from_tn_url(book_url.tn_url)
+            thread_book_url_collection.append(book_url)
+        thread_pools[index] = thread_book_url_collection
+        config.get('console').log(f'Thread {index} finished its job.')
+
+
+    @staticmethod
+    def _run_download_all(index, url_workload, extra_workload, book_urls):
+        start_index, workload = Scraper._calculate_start_index_and_workload(
+            index, url_workload, extra_workload
+        )
+        for book_url in book_urls[start_index:start_index+workload]:
+            if book_url.resource_url.startswith(Scraper._URL_THAT_WONT_WORK):
+                continue
+            if book_url.resource_url.startswith('/'):
+                resource_url = Scraper._MAIN_URL + book_url.resource_url[1:]
+                filename_regex = re.compile('^.+/(.+)$')
+                date_code_regex = re.compile('^.+/(.+)/.*$')
+                date_code_2_regex = re.compile('^.+/(.*)//.*$')
+                prefix_regex = re.compile('^(.+)/.*$')
+                filename = filename_regex.findall(resource_url)[0]
+                date_code = date_code_regex.findall(resource_url)[0]
+                if date_code == '':
+                    date_code = date_code_2_regex.findall(resource_url)[0]
+                quoted_resource_url = ''.join([
+                    prefix_regex.findall(resource_url)[0],
+                    '/',
+                    quote(filename)
+                ])
+                file_path = ''.join([
+                    Scraper._DEFAULT_OUTPUT_DIR,
+                    '/',
+                    '"',
+                    date_code,
+                    ' ',
+                    filename,
+                    '"',
+                ])
+                Scraper._download_from_url_and_save(quoted_resource_url, file_path, filename)
+        config.get('console').log(f'Thread {index} finished its job.')
+
+
+    @staticmethod
+    def _download_from_url_and_save(url, path, filename):
+        download_command = 'axel %s --output=%s' % (url, path)
+        result = os.system('xterm -e %s' % download_command)
+        if result == 0:
+            return
+        rich.print(f'Download {filename} failed, now re-start its downloading...')
+        Scraper.__download_from_url_and_save(url, path, filename)
 
 
     def _retrieve_book_profile_page_urls_from_other_page(self, page_count):
@@ -243,8 +320,34 @@ class Scraper:
         self.db.store_book_info_collection(self._book_info_collection)
 
 
+    def _collect_resource_urls_from_tn_urls(self):
+        thread_manager = ThreadManager()
+        thread_manager.thread_job_distribution(len(self._book_url_collection), ThreadManager.THREAD_COLLECT_RESOURCE_URL_JOB)
+        thread_manager.thread_job_preparation(
+            Scraper._run_collect_book_url,
+            ThreadManager.THREAD_COLLECT_RESOURCE_URL_JOB,
+            self._book_url_collection
+        )
+        self._book_url_collection = []
+        thread_manager.thread_job_handling(self._book_url_collection)
+        self.db.store_book_url_collection(self._book_url_collection)
+
+
+    def _download_all_books(self):
+        if not os.path.exists(self._DEFAULT_OUTPUT_DIR):
+            os.mkdir(self._DEFAULT_OUTPUT_DIR, 0o775)
+        thread_manager = ThreadManager()
+        thread_manager.thread_job_distribution(len(self._book_url_collection), ThreadManager.THREAD_DOWNLOAD_JOB)
+        thread_manager.thread_job_preparation(
+            Scraper._run_download_all,
+            ThreadManager.THREAD_DOWNLOAD_JOB,
+            self._book_url_collection
+        )
+        thread_manager.thread_job_handling()
+
+
     def collect_book_info(self):
-        self._book_profile_page_urls = self.db.select_profile_urls()
+        self._book_profile_page_urls = self.db.select_all_profile_urls()
         self._profile_urls_status()
         if self._book_profile_page_urls == []:
             rich.print('There is no record in [bold]profile[/bold] table, probably need to run [bold]search[/bold] command first.')
@@ -252,3 +355,19 @@ class Scraper:
             return
         with config.get('console').status('[bold green]collecting book info from profile pages...') as status:
             self._collect_book_info_from_profile_pages()
+    
+
+    def collect_all_resource_urls(self):
+        self._book_url_collection = self.db.select_all_book_urls()
+        if self._book_url_collection == []:
+            rich.print(':monkey: :pile_of_poo: It looks like nothing needs to be done.')
+        with config.get('console').status('[bold green]collecting resource urls from tn_urls...') as status:
+            self._collect_resource_urls_from_tn_urls()
+
+
+    def download_all_books(self):
+        self._book_url_collection = self.db.select_all_book_urls(use_resource_url=True)
+        if self._book_url_collection == []:
+            rich.print(':monkey: :pile_of_poo: It looks like nothing needs to be done.')
+        with config.get('console').status('[bold green]downloading all ebooks...') as status:
+            self._download_all_books()

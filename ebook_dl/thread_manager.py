@@ -7,11 +7,13 @@ class ThreadManager():
 
     THREAD_PROFILE_PAGE_JOB = 1
     THREAD_RETRIEVE_RESOURCE_JOB = 2
-    THREAD_DOWNLOAD_JOB = 3
+    THREAD_COLLECT_RESOURCE_URL_JOB = 3
+    THREAD_DOWNLOAD_JOB = 4
 
     THREAD_NUMBERS = {
         THREAD_PROFILE_PAGE_JOB: 200,
         THREAD_RETRIEVE_RESOURCE_JOB: 130,
+        THREAD_COLLECT_RESOURCE_URL_JOB: 130,
         THREAD_DOWNLOAD_JOB: 100,
     }
 
@@ -26,7 +28,10 @@ class ThreadManager():
 
 
     def _thread_func_args(self, i, thread_job, param_payload):
-        if thread_job in (ThreadManager.THREAD_PROFILE_PAGE_JOB, ThreadManager.THREAD_RETRIEVE_RESOURCE_JOB):
+        if thread_job in (
+            ThreadManager.THREAD_PROFILE_PAGE_JOB,
+            ThreadManager.THREAD_RETRIEVE_RESOURCE_JOB,
+            ThreadManager.THREAD_COLLECT_RESOURCE_URL_JOB):
             return (
                 self._thread_pools,
                 i,
